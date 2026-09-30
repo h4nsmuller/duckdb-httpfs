@@ -7,6 +7,9 @@
 
 #include <curl/curl.h>
 #include <mutex>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <sys/stat.h>
 #include "duckdb/common/exception/http_exception.hpp"
 
@@ -304,6 +307,18 @@ private:
 	public:
 		unique_ptr<HTTPResponse> Finish(CURLcode result) {
 			client.request_info->response_code = client.curl->GetResponseCode();
+			// [DS-INSTRUMENT] CURLINFO_NUM_CONNECTS = new connections opened in THIS transfer (0 = kept-alive
+			// connection reused).  Summing it tells us whether encrypted reads defeat HTTP keep-alive.
+			if (getenv("DS_CURLCONN") && client.curl) {
+				long ds_nc = 0;
+				if (curl_easy_getinfo(*client.curl, CURLINFO_NUM_CONNECTS, &ds_nc) == CURLE_OK) {
+					static std::atomic<long> ds_req {0};
+					static std::atomic<long> ds_new {0};
+					long r = ++ds_req;
+					long tn = (ds_new += ds_nc);
+					fprintf(stderr, "CURLCONN new=%ld total_req=%ld total_new=%ld\n", ds_nc, r, tn);
+				}
+			}
 			const bool include_body = !stream_content || client.request_info->response_code >= 400;
 			unique_ptr<HTTPResponse> response;
 			try {
